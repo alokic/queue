@@ -1,0 +1,65 @@
+# Default values for all queue components.
+environment: staging
+
+controller:
+  name: queue-controller
+  replicas: 2
+
+  image:
+    repository: quay.io/alokic/queue-controller
+    tag: staging
+    pullPolicy: Always
+
+  autoscaling:
+    replicas:
+      min: 2
+      max: 2
+    cpu:
+      target: 80
+
+  resources:
+    limits:
+      cpu: 150m
+      memory: 384Mi
+    requests:
+      cpu: 150m
+      memory: 384Mi
+
+  service:
+    type: ClusterIP
+    healthCheckPath: /health
+    externalPort: 4000
+    internalPort: 4000
+    name: http
+
+  livenessProbe:
+    initialDelaySeconds: 30
+    periodSeconds: 30
+    timeoutSeconds: 5
+    httpGet:
+      path: /health
+      port: 4000
+
+  readinessProbe:
+    initialDelaySeconds: 30
+    timeoutSeconds: 5
+    periodSeconds: 30
+    httpGet:
+      path: /health
+      port: 4000
+
+  ingress:
+    annotations:
+      external-dns.honestbee.io/enable: "true" # get external DNS record
+      kubernetes.io/ingress.class: nginx-internal
+      ingress.kubernetes.io/force-ssl-redirect: "true"
+    weight: true
+    urls:
+    - queue-controller-staging.internal.honestbee.com
+
+  datadogAnnotations:
+    check_names: '["http_check"]'
+    init_configs: '[{}]'
+
+  config:
+    CONTROLLER_ENV: staging

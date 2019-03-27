@@ -1,0 +1,3 @@
+dispatcher_address: "http://localhost:4001"
+producer_job: echo_producer
+num_msgs: 1

@@ -1,0 +1,6 @@
+dispatcher_address: "http://localhost:4001"
+consumer_job: echo
+num_retry_queues: 2
+msg_poll_interval: 1000 #ms
+dlq_poll_interval: 30 #seconds
+

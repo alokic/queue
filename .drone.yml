@@ -1,0 +1,309 @@
+workspace:
+  base: /go/src
+  path: github.com/alokic/queue
+
+services:
+  database:
+    image: postgres:10.4
+    environment:
+    - POSTGRES_DB=queue_test
+    - POSTGRES_USER=postgres
+
+pipeline:
+
+  build:
+    image: golang:1.11-alpine
+    pull: true # Always pull latest image
+    commands:
+     - apk update
+     - apk add --no-cache build-base sed git
+     - go get -u github.com/golang/dep/cmd/dep
+     - go get github.com/axw/gocov/gocov
+     - go get github.com/mattn/goveralls
+     - sed -i -e 's/v3\.8/edge/g' /etc/apk/repositories && apk add --no-cache librdkafka-dev=0.11.6-r1
+     - go get github.com/pressly/goose/cmd/goose
+     - goose -dir app/controller/db/migrations postgres "sslmode=disable user=postgres host=database dbname=queue_test" up
+     - make
+     - goveralls -show -service drone.io
+    environment:
+     - DB_URL=sslmode=disable user=postgres host=database dbname=queue_test
+     - COVERALLS_TOKEN=8Fb5ShHmMupJAydKDtEnEA9inFZAodwDq
+    when:
+      event: [pull_request, push, tag, deployment]
+
+#  integration-test:
+#    image: golang:1.11-alpine
+#    pull: true # Always pull latest image
+#    commands:
+#    - apk update
+#    - apk add --no-cache build-base sed git
+#    - apk --update add 'py-pip==8.1.2-r0'
+#    - pip install 'docker-compose==1.22.0'
+#    - sed -i -e 's/v3\.8/edge/g' /etc/apk/repositories && apk add --no-cache librdkafka-dev=0.11.6-r1
+#    - docker-compose up -d
+#    - cd test && go test -v -tags integration ./...
+#    - docker-compose stop
+#    when:
+#      event: [pull_request, push, tag, deployment]
+
+  publish-controller:
+    image: plugins/docker
+    group: publish
+    pull: true
+    repo: quay.io/alokic/queue-controller
+    dockerfile: build/controller/Dockerfile
+    registry: ${DOCKER_REGISTRY}
+    tags:
+    - ${DRONE_TAG##v}
+    - ${DRONE_COMMIT_BRANCH}
+    secrets:
+    - docker_username
+    - docker_password
+    - docker_registry
+    build_args:
+    - VERSION=${DRONE_TAG##v}
+    when:
+      event: tag
+      branch: master
+      status: [success, failure]
+
+  publish-dispatcher:
+    image: plugins/docker
+    group: publish
+    pull: true
+    repo: quay.io/alokic/queue-dispatcher
+    dockerfile: build/dispatcher/Dockerfile
+    registry: ${DOCKER_REGISTRY}
+    tags:
+    - ${DRONE_TAG##v}
+    - ${DRONE_COMMIT_BRANCH}
+    secrets:
+    - docker_username
+    - docker_password
+    - docker_registry
+    build_args:
+    - VERSION=${DRONE_TAG##v}
+    when:
+      event: tag
+      branch: master
+      status: [success, failure]
+     
+  migration-staging:
+    image: golang:1.11-alpine
+    pull: true
+    secrets:
+    - source: staging_controller_db_url
+      target: controller_db_url
+    commands:
+      - apk add --no-cache gcc musl-dev git make
+      - go get github.com/pressly/goose/cmd/goose
+      - goose -dir app/controller/db/migrations postgres $CONTROLLER_DB_URL up
+    when:
+      event: tag
+      branch: master
+      status: success
+      ref:
+        include: [refs/tags/*alpha*, refs/tags/*beta*, refs/tags/*rc*]
+  # migration-prod:
+  #   image: golang:1.11-alpine
+  #   pull: true
+  #   secrets:
+  #   - source: prod_authorizer_db_url
+  #     target: authorizer_db_url
+  #   commands:
+  #     - apk add --no-cache gcc musl-dev git make
+  #     - go get github.com/pressly/goose/cmd/goose
+  #     - goose -dir pkg/db/migrate postgres $AUTHORIZER_DB_URL up
+  #   when:
+  #     event: [tag]
+  #     status: success
+  #     ref:
+  #       include: [refs/tags/*]
+  #       exclude: [refs/tags/*alpha*, refs/tags/*beta*, refs/tags/*rc*]
+
+  deploy-controller-staging-1a:
+    tiller_ns: util
+    namespace: util
+    image: quay.io/honestbee/drone-helm
+    skip_tls_verify: true
+    wait: true # wait for pods to start
+    helm_repos: hb-charts=http://helm-charts.internal.honestbee.com
+    chart: hb-charts/queue
+    chart_version: "0.1.1" # update this if changing helm chart
+    values: image.tag=${DRONE_COMMIT_BRANCH}-${DRONE_COMMIT_SHA:0:8},az=apse1a
+    values_files: ["deployment/controller/values-staging.yaml"]
+    release: queue-controller
+    prefix: STAGING_1A
+    secrets:
+    - source: staging_1a_api_server
+      target: api_server
+    - source: staging_1a_kubernetes_token
+      target: kubernetes_token
+    when:
+      event: tag
+      branch: master
+      status: success
+      ref:
+        include: [refs/tags/*alpha*, refs/tags/*beta*, refs/tags/*rc*]
+
+  deploy-controller-staging-1b:
+    tiller_ns: util
+    namespace: util
+    image: quay.io/honestbee/drone-helm
+    skip_tls_verify: true
+    wait: true # wait for pods to start
+    helm_repos: hb-charts=http://helm-charts.internal.honestbee.com
+    chart: hb-charts/queue
+    chart_version: "0.1.1" # update this if changing helm chart
+    values: image.tag=${DRONE_COMMIT_BRANCH}-${DRONE_COMMIT_SHA:0:8},az=apse1a
+    values_files: ["deployment/controller/values-staging.yaml"]
+    release: queue-controller
+    prefix: STAGING_1B
+    secrets:
+    - source: staging_1b_api_server
+      target: api_server
+    - source: staging_1b_kubernetes_token
+      target: kubernetes_token
+    when:
+      event: tag
+      branch: master
+      status: success
+      ref:
+        include: [refs/tags/*alpha*, refs/tags/*beta*, refs/tags/*rc*]
+
+  # deploy-staging-1a:
+  #   tiller_ns: util
+  #   namespace: util
+  #   group: deploy
+  #   image: quay.io/honestbee/drone-helm
+  #   skip_tls_verify: true
+  #   wait: true
+  #   helm_repos: hb-charts=http://helm-charts.internal.honestbee.com
+  #   chart: hb-charts/authorizer
+  #   chart_version: "0.0.1"
+  #   values: image.tag=${DRONE_TAG##v},az=apse1a
+  #   values_files: ["deployment/values-staging.yaml"]
+  #   release: authorizer
+  #   prefix: STAGING_1A
+  #   secrets:
+  #     - source: staging_1a_api_server
+  #       target: api_server
+  #     - source: staging_1a_kubernetes_token
+  #       target: kubernetes_token
+  #   when:
+  #     event: tag
+  #     status: success
+  #     ref:
+  #       include: [refs/tags/*alpha*, refs/tags/*beta*, refs/tags/*rc*]
+
+  # deploy-staging-1b:
+  #   tiller_ns: util
+  #   namespace: util
+  #   group: deploy
+  #   image: quay.io/honestbee/drone-helm
+  #   skip_tls_verify: true
+  #   wait: true
+  #   helm_repos: hb-charts=http://helm-charts.internal.honestbee.com
+  #   chart: hb-charts/authorizer
+  #   chart_version: "0.0.1"
+  #   values: image.tag=${DRONE_TAG##v},az=apse1b
+  #   values_files: ["deployment/values-staging.yaml"]
+  #   release: authorizer
+  #   prefix: STAGING_1B
+  #   secrets:
+  #     - source: staging_1b_api_server
+  #       target: api_server
+  #     - source: staging_1b_kubernetes_token
+  #       target: kubernetes_token
+  #   when:
+  #     event: tag
+  #     status: success
+  #     ref:
+  #       include: [refs/tags/*alpha*, refs/tags/*beta*, refs/tags/*rc*]
+
+  # deploy-prod-1a:
+  #   tiller_ns: util
+  #   namespace: util
+  #   group: deploy
+  #   image: quay.io/honestbee/drone-helm
+  #   skip_tls_verify: true
+  #   wait: true
+  #   helm_repos: hb-charts=http://helm-charts.internal.honestbee.com
+  #   chart: hb-charts/authorizer
+  #   chart_version: "0.0.1"
+  #   values: image.tag=${DRONE_TAG##v},az=apse1a
+  #   values_files: ["deployment/values-prod.yaml"]
+  #   release: authorizer
+  #   prefix: PROD_1A
+  #   secrets:
+  #     - source: prod_1a_api_server
+  #       target: api_server
+  #     - source: prod_1a_kubernetes_token
+  #       target: kubernetes_token
+  #   when:
+  #     event: tag
+  #     status: success
+  #     ref:
+  #       include: [refs/tags/*]
+  #       exclude: [refs/tags/*alpha*, refs/tags/*beta*, refs/tags/*rc*]
+
+  # deploy-prod-1b:
+  #   tiller_ns: util
+  #   namespace: util
+  #   group: deploy
+  #   image: quay.io/honestbee/drone-helm
+  #   skip_tls_verify: true
+  #   wait: true
+  #   helm_repos: hb-charts=http://helm-charts.internal.honestbee.com
+  #   chart: hb-charts/authorizer
+  #   chart_version: "0.0.1"
+  #   values: image.tag=${DRONE_TAG##v},az=apse1b
+  #   values_files: ["deployment/values-prod.yaml"]
+  #   release: authorizer
+  #   prefix: PROD_1B
+  #   secrets:
+  #     - source: prod_1b_api_server
+  #       target: api_server
+  #     - source: prod_1b_kubernetes_token
+  #       target: kubernetes_token
+  #   when:
+  #     event: tag
+  #     status: success
+  #     ref:
+  #       include: [refs/tags/*]
+  #       exclude: [refs/tags/*alpha*, refs/tags/*beta*, refs/tags/*rc*]
+
+  notify:
+    image: plugins/slack
+    webhook: ${SLACK_WEBHOOK}
+    channel: queue-feed
+    secrets: [ slack_webhook ]
+    when:
+      status: [success, failure]
+      event: [deployment, push, tag]
+
+
+#  deploy-notify:
+#    image: plugins/slack
+#    webhook: ${SLACK_WEBHOOK}
+#    channel: feed-authorizer
+#    template: >
+#      {{#success build.status}}
+#        repo = `{{repo.name}}`. Deployment succeeded. Good job.
+#        app-version = `{{build.tag}}`
+#        branch = `{{build.branch}}`
+#        git-commit-hash = `{{build.commit}}`
+#      {{else}}
+#        drone-build-number = {{build.number}} failed. Fix me please.
+#        https://drone.honestbee.com/honestbee/{{repo.name}}/{{build.number}}
+#        app-version = `{{build.tag}}`
+#        branch = `{{build.branch}}`
+#        git-commit-hash = `{{build.commit}}`
+#      {{/success}}
+#    secrets:
+#    - slack_webhook
+#    when:
+#      status: [success, failure]
+#      event: tag
+#      ref:
+#        include: [refs/tags/*]
