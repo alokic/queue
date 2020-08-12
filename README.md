@@ -1,18 +1,17 @@
 # queue
 [![Coverage Status](https://coveralls.io/repos/github/alokic/queue/badge.svg?branch=master&t=6g0laG)](https://coveralls.io/github/alokic/queue?branch=master)
-[![Build Status](https://drone.honestbee.com/api/badges/alokic/queue/status.svg)](https://drone.honestbee.com/alokic/queue)
 
-queue is worker based job processing system.
+`queue` is job processing service which can be embedded as sidecar. 
 
-https://honestbee.atlassian.net/wiki/spaces/EN/pages/639600872/queue+-+An+ES+Indexing+system
+As of now it supports kafka. Plan is to add redis and kinesis.
 
 It has 2 components:
 controller and dispatcher.
 
-Controller is for registering job in the system.
-Dispatcher syncs config from controller.
+Controller is for registering job config. Job config defines address of broker, queue name (topics) etc.
+Dispatcher syncs job config from controller.
 
-Dispatcher can be run as a standalone process OR as a sidecar container in your pod.
+Dispatcher can be run as a sidecar container in your pod OR as a standalone service.
 
 # Local setup
 queue involves a lot of components namely controller, dispatcher, Postgres, kafka broker, zookeeper.
